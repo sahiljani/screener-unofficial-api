@@ -1,0 +1,19 @@
+services:
+  api:
+    build: .
+    container_name: screener-unofficial-api
+    ports:
+      - "8000:8000"
+    environment:
+      API_KEY: ${API_KEY:-}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: screener-unofficial-redis
+    ports:
+      - "6379:6379"
