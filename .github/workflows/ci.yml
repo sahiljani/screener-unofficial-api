@@ -28,4 +28,3 @@ jobs:
         run: |
           . .venv/bin/activate
           pytest -q
-        working-directory: screener-unofficial-api
