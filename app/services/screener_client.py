@@ -645,6 +645,213 @@ class ScreenerClient:
             "warnings": [],
         }
 
+    def _extract_screens_from_page(self, tree: HTMLParser) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        seen = set()
+
+        for li in tree.css("ul.items li"):
+            a = li.css_first("a[href]")
+            if not a:
+                continue
+
+            href = (a.attributes.get("href") or "").strip()
+            if not href.startswith("/screens/"):
+                continue
+
+            m = re.match(r"^/screens/(\d+)/([^/]+)/?$", href)
+            if not m:
+                continue
+
+            screen_id = int(m.group(1))
+            slug = m.group(2)
+            title_node = a.css_first("strong")
+            desc_node = a.css_first("span.sub")
+
+            title = title_node.text(separator=" ", strip=True) if title_node else a.text(separator=" ", strip=True)
+            description = desc_node.text(separator=" ", strip=True) if desc_node else None
+
+            key = (screen_id, slug)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            items.append(
+                {
+                    "screen_id": screen_id,
+                    "slug": slug,
+                    "title": title,
+                    "description": description,
+                    "url": urljoin(BASE, href),
+                }
+            )
+
+        return items
+
+    def _extract_screens_pagination(self, tree: HTMLParser) -> tuple[int, int | None]:
+        current_page = 1
+        total_pages: int | None = None
+
+        for a in tree.css(".pagination a[href]"):
+            text = a.text(strip=True)
+            href = a.attributes.get("href") or ""
+
+            if text.isdigit() and href.startswith("#"):
+                try:
+                    current_page = int(text)
+                except ValueError:
+                    pass
+
+            parsed = parse_qs(urlparse(href).query)
+            for value in parsed.get("page", []):
+                try:
+                    total_pages = max(total_pages or 0, int(value))
+                except ValueError:
+                    continue
+
+        return current_page, total_pages
+
+    def list_screens(self, page: int = 1, include_all_pages: bool = False, proxy_url: str | None = None) -> dict[str, Any]:
+        def _fetch_page(p: int) -> dict[str, Any]:
+            page_url = f"{BASE}/screens/?page={p}"
+            html = self._fetch_html(page_url, proxy_url=proxy_url)
+            tree = HTMLParser(html)
+
+            title = tree.css_first("h1")
+            heading = title.text(separator=" ", strip=True) if title else "Popular Stock Screens"
+            items = self._extract_screens_from_page(tree)
+            current_page, total_pages = self._extract_screens_pagination(tree)
+
+            return {
+                "page": p,
+                "url": page_url,
+                "heading": heading,
+                "items": items,
+                "item_count": len(items),
+                "pagination": {
+                    "current_page": current_page or p,
+                    "total_pages": total_pages,
+                },
+            }
+
+        first = _fetch_page(page)
+
+        if not include_all_pages:
+            return {
+                "data": {
+                    "page": first,
+                },
+                "meta": self._meta(first["url"], proxy_url, parser_version="0.8.0"),
+                "warnings": [],
+            }
+
+        total_pages = first["pagination"].get("total_pages") or page
+        pages = [first]
+        for p in range(page + 1, total_pages + 1):
+            pages.append(_fetch_page(p))
+
+        return {
+            "data": {
+                "pages": pages,
+                "summary": {
+                    "from_page": page,
+                    "to_page": total_pages,
+                    "pages_fetched": len(pages),
+                    "screens_fetched": sum(pg["item_count"] for pg in pages),
+                },
+            },
+            "meta": self._meta(first["url"], proxy_url, parser_version="0.8.0"),
+            "warnings": [],
+        }
+
+    def fetch_screen_details(
+        self,
+        screen_id: int,
+        slug: str,
+        page: int = 1,
+        limit: int = 50,
+        include_all_pages: bool = False,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        base_url = f"{BASE}/screens/{screen_id}/{slug}/"
+
+        def _fetch_page(p: int) -> dict[str, Any]:
+            page_url = f"{base_url}?limit={limit}&page={p}"
+            html = self._fetch_html(page_url, proxy_url=proxy_url)
+            tree = HTMLParser(html)
+
+            heading = tree.css_first("h1")
+            title = heading.text(separator=" ", strip=True) if heading else None
+
+            query_node = tree.css_first("#query-builder")
+            query = query_node.text(separator="\n", strip=True) if query_node else None
+
+            author = None
+            for pnode in tree.css("p.sub"):
+                txt = pnode.text(separator=" ", strip=True)
+                if txt.lower().startswith("by "):
+                    author = txt[3:].strip()
+                    break
+
+            columns, rows = self._extract_market_rows(tree)
+            current_page, total_pages = self._extract_pagination(tree)
+            total_results = self._extract_market_result_count(tree)
+
+            return {
+                "page": p,
+                "url": page_url,
+                "title": title,
+                "author": author,
+                "query": query,
+                "columns": columns,
+                "rows": rows,
+                "row_count": len(rows),
+                "pagination": {
+                    "current_page": current_page or p,
+                    "total_pages": total_pages,
+                    "limit": limit,
+                },
+                "total_results": total_results,
+            }
+
+        first = _fetch_page(page)
+
+        if not first.get("title"):
+            raise ValueError("Screen not found or inaccessible")
+
+        if not include_all_pages:
+            return {
+                "data": {
+                    "screen_id": screen_id,
+                    "slug": slug,
+                    "base_url": base_url,
+                    "page": first,
+                },
+                "meta": self._meta(first["url"], proxy_url, parser_version="0.8.0"),
+                "warnings": [],
+            }
+
+        total_pages = first["pagination"].get("total_pages") or 1
+        pages = [first]
+        for p in range(page + 1, total_pages + 1):
+            pages.append(_fetch_page(p))
+
+        return {
+            "data": {
+                "screen_id": screen_id,
+                "slug": slug,
+                "base_url": base_url,
+                "pages": pages,
+                "summary": {
+                    "from_page": page,
+                    "to_page": total_pages,
+                    "pages_fetched": len(pages),
+                    "rows_fetched": sum(pg["row_count"] for pg in pages),
+                },
+            },
+            "meta": self._meta(first["url"], proxy_url, parser_version="0.8.0"),
+            "warnings": [],
+        }
+
     def _extract_locs(self, xml: str) -> list[str]:
         urls = []
         start = 0

@@ -99,6 +99,21 @@ Open:
     - `include_all_pages` (`true|false`, default: `false`)
       - if `true`, fetches every page from `page` to last page and returns all rows
 
+### Screens data
+- `GET /v1/screens`
+  - Lists Screener public screens for a given page
+  - Query params:
+    - `page` (default: `1`)
+    - `include_all_pages` (`true|false`, default: `false`)
+      - if `true`, fetches every page from `page` to last page and returns all screens
+- `GET /v1/screens/{screen_id}/{slug}`
+  - Returns detailed data for one screen (query + table + pagination)
+  - Query params:
+    - `page` (default: `1`)
+    - `limit` (default: `50`, max: `50`)
+    - `include_all_pages` (`true|false`, default: `false`)
+      - if `true`, fetches every page from `page` to last page and returns all rows
+
 Optional query params on company routes:
 - `mode=standalone|consolidated` (default: `consolidated`)
 - `proxy_url` (string | null)
@@ -134,6 +149,18 @@ curl "http://127.0.0.1:8000/v1/sectors/pharmaceuticals-biotechnology?limit=50&pa
 
 # Sector page data (all pages)
 curl "http://127.0.0.1:8000/v1/sectors/pharmaceuticals-biotechnology?limit=50&page=1&include_all_pages=true"
+
+# Screens list (single page)
+curl "http://127.0.0.1:8000/v1/screens?page=50"
+
+# Screens list (all pages from page 1)
+curl "http://127.0.0.1:8000/v1/screens?page=1&include_all_pages=true"
+
+# Screen details (single page)
+curl "http://127.0.0.1:8000/v1/screens/1450832/fibonacci-based-btw-05-and-0786?page=1&limit=50"
+
+# Screen details (all pages)
+curl "http://127.0.0.1:8000/v1/screens/1450832/fibonacci-based-btw-05-and-0786?page=1&limit=50&include_all_pages=true"
 ```
 
 ---
