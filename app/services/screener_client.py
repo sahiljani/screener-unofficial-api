@@ -1293,7 +1293,7 @@ class ScreenerClient:
             base_url = f"{BASE}/screens/{screen_id}/{active_slug}/"
 
             async def _fetch_page(p: int) -> dict[str, Any]:
-                page_url = f"{base_url}?limit={limit}&page={p}"
+                page_url = f"{base_url}?page={p}"
                 html = await self._async_fetch_html(page_url, proxy_url=proxy_url)
                 tree = HTMLParser(html)
 
@@ -1542,7 +1542,7 @@ class ScreenerClient:
             base_url = f"{BASE}/screens/{screen_id}/{active_slug}/"
 
             def _fetch_page(p: int) -> dict[str, Any]:
-                page_url = f"{base_url}?limit={limit}&page={p}"
+                page_url = f"{base_url}?page={p}"
                 html = self._fetch_html(page_url, proxy_url=proxy_url)
                 tree = HTMLParser(html)
 

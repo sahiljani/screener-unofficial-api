@@ -99,9 +99,9 @@ class StubScreensClient(ScreenerClient):
             return SCREENS_PAGE_1
         if url == 'https://www.screener.in/screens/?page=2':
             return SCREENS_PAGE_2
-        if 'https://www.screener.in/screens/1450832/fibonacci-based-btw-05-and-0786/?limit=50&page=1' in url:
+        if 'https://www.screener.in/screens/1450832/fibonacci-based-btw-05-and-0786/?page=1' in url:
             return SCREEN_DETAILS_PAGE_1
-        if 'https://www.screener.in/screens/1450832/fibonacci-based-btw-05-and-0786/?limit=50&page=2' in url:
+        if 'https://www.screener.in/screens/1450832/fibonacci-based-btw-05-and-0786/?page=2' in url:
             return SCREEN_DETAILS_PAGE_2
         return ''
 

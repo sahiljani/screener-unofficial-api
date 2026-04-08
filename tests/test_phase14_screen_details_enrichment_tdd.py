@@ -35,7 +35,7 @@ SCREEN_DETAILS_ENRICHED = """
 
 class StubPhase14Client(ScreenerClient):
     def _fetch_html_raw(self, url: str, proxy_url: str | None = None) -> str:
-        if 'https://www.screener.in/screens/777/quality-growth/?limit=50&page=1' in url:
+        if 'https://www.screener.in/screens/777/quality-growth/?page=1' in url:
             return SCREEN_DETAILS_ENRICHED
         return ''
 
