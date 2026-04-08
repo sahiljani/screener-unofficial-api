@@ -833,9 +833,16 @@ class ScreenerClient:
         include_all_pages: bool = False,
         max_pages: int | None = None,
         proxy_url: str | None = None,
+        filters: str | None = None,
     ) -> dict[str, Any]:
         if max_pages is not None and max_pages < 1:
             raise ValueError("max_pages must be >= 1")
+
+        filters_payload = {
+            "raw": filters,
+            "applied": False,
+            "note": "Filters placeholder is accepted for forward compatibility and currently not applied upstream.",
+        }
 
         def _fetch_page(p: int) -> dict[str, Any]:
             page_url = f"{BASE}/screens/?page={p}"
@@ -865,8 +872,9 @@ class ScreenerClient:
             return {
                 "data": {
                     "page": first,
+                    "filters": filters_payload,
                 },
-                "meta": self._meta(first["url"], proxy_url, parser_version="0.9.0"),
+                "meta": self._meta(first["url"], proxy_url, parser_version="1.1.0"),
                 "warnings": [],
             }
 
@@ -902,8 +910,9 @@ class ScreenerClient:
                     "duplicates_skipped": duplicates_skipped,
                     "max_pages_applied": max_pages is not None,
                 },
+                "filters": filters_payload,
             },
-            "meta": self._meta(first["url"], proxy_url, parser_version="0.9.0"),
+            "meta": self._meta(first["url"], proxy_url, parser_version="1.1.0"),
             "warnings": [],
         }
 

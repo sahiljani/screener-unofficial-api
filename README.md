@@ -92,6 +92,9 @@ Open:
 ### Sectors / Market data
 - `GET /v1/sectors`
   - Lists supported top-level sectors (slug + Screener market URL when available)
+  - Example response highlights:
+    - `data.count`
+    - `data.sectors[].{name,slug,url,available}`
 - `GET /v1/sectors/{sector}`
   - Returns paginated table data for a sector market page
   - Query params:
@@ -99,6 +102,10 @@ Open:
     - `limit` (default: `50`, max: `50`)
     - `include_all_pages` (`true|false`, default: `false`)
       - if `true`, fetches every page from `page` to last page and returns all rows
+  - Example response highlights:
+    - `data.page.columns`
+    - `data.page.rows`
+    - `data.page.pagination`
 
 ### Screens data
 - `GET /v1/screens/pages`
@@ -111,7 +118,12 @@ Open:
       - if `true`, fetches every page from `page` to last page and returns all screens
     - `max_pages` (optional, >= `1`)
       - cap total fetched pages when `include_all_pages=true`
+    - `filters` (optional string placeholder; accepted but not yet applied upstream)
   - Includes cross-page de-duplication by `screen_id`.
+  - Example response highlights:
+    - `data.page.items`
+    - `data.summary` (for all-pages mode)
+    - `data.filters`
 - `GET /v1/screens/{screen_id}/{slug}`
   - Returns detailed data for one screen (query + table + pagination)
   - Includes enriched metadata when available:
@@ -124,6 +136,10 @@ Open:
     - `limit` (default: `50`, max: `50`)
     - `include_all_pages` (`true|false`, default: `false`)
       - if `true`, fetches every page from `page` to last page and returns all rows
+  - Example response highlights:
+    - `data.page.query`
+    - `data.page.columns`
+    - `data.page.rows`
 
 Optional query params on company routes:
 - `mode=standalone|consolidated` (default: `consolidated`)

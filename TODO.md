@@ -26,10 +26,10 @@
 
 ## Phase 16 - API UX
 
-- [ ] Add endpoint docs section with response examples for:
-  - [ ] `/v1/sectors`
-  - [ ] `/v1/sectors/{sector}`
-  - [ ] `/v1/screens`
-  - [ ] `/v1/screens/{screen_id}/{slug}`
-- [ ] Add OpenAPI examples for new query parameters (`include_all_pages`, `limit`, `page`).
-- [ ] Add `filters` placeholder support for future screen query customization.
+- [x] Add endpoint docs section with response examples for:
+  - [x] `/v1/sectors`
+  - [x] `/v1/sectors/{sector}`
+  - [x] `/v1/screens`
+  - [x] `/v1/screens/{screen_id}/{slug}`
+- [x] Add OpenAPI examples for new query parameters (`include_all_pages`, `limit`, `page`).
+- [x] Add `filters` placeholder support for future screen query customization.

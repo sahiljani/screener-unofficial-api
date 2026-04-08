@@ -156,7 +156,42 @@ def search_companies(
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.get("/v1/sectors")
+@router.get(
+    "/v1/sectors",
+    openapi_extra={
+        "examples": {
+            "listSectors": {
+                "summary": "List supported sectors",
+                "value": {
+                    "data": {
+                        "count": 2,
+                        "sectors": [
+                            {
+                                "name": "Pharmaceuticals & Biotechnology",
+                                "slug": "pharmaceuticals-biotechnology",
+                                "url": "https://www.screener.in/market/IN06/IN0601/IN060101/",
+                                "available": True,
+                            },
+                            {
+                                "name": "Aerospace & Defense",
+                                "slug": "aerospace-defense",
+                                "url": "https://www.screener.in/market/IN07/IN0702/IN070201/IN070201001/",
+                                "available": True,
+                            },
+                        ],
+                    },
+                    "meta": {
+                        "source_url": "https://www.screener.in/market/",
+                        "fetched_at": "2026-04-08T00:00:00+00:00",
+                        "parser_version": "1.0.0",
+                        "proxy_used": False,
+                    },
+                    "warnings": [],
+                },
+            }
+        }
+    },
+)
 def list_sectors(
     proxy_url: str | None = PROXY_URL_QUERY,
 ):
@@ -166,12 +201,37 @@ def list_sectors(
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.get("/v1/sectors/{sector}")
+@router.get(
+    "/v1/sectors/{sector}",
+    openapi_extra={
+        "examples": {
+            "sectorSinglePage": {
+                "summary": "Single page sector response",
+                "value": {
+                    "data": {
+                        "sector": "Pharmaceuticals & Biotechnology",
+                        "slug": "pharmaceuticals-biotechnology",
+                        "base_url": "https://www.screener.in/market/IN06/IN0601/IN060101/",
+                        "page": {
+                            "page": 1,
+                            "columns": ["S.No.", "Name", "CMP Rs."],
+                            "rows": [["1.", "Sun Pharma.Inds.", "1718.00"]],
+                            "row_count": 1,
+                            "pagination": {"current_page": 1, "total_pages": 9, "limit": 50},
+                        },
+                    },
+                    "meta": {"parser_version": "1.0.0"},
+                    "warnings": [],
+                },
+            }
+        }
+    },
+)
 def get_sector_data(
     sector: str,
-    page: int = Query(default=1, ge=1),
-    limit: int = Query(default=50, ge=1, le=50),
-    include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page"),
+    page: int = Query(default=1, ge=1, examples=[1, 2]),
+    limit: int = Query(default=50, ge=1, le=50, examples=[10, 25, 50]),
+    include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page", examples=[False, True]),
     proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
@@ -188,15 +248,47 @@ def get_sector_data(
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.get("/v1/screens")
+@router.get(
+    "/v1/screens",
+    openapi_extra={
+        "examples": {
+            "screensSinglePage": {
+                "summary": "Screens list on a single page",
+                "value": {
+                    "data": {
+                        "page": {
+                            "page": 1,
+                            "item_count": 2,
+                            "items": [
+                                {
+                                    "screen_id": 1450832,
+                                    "slug": "fibonacci-based-btw-05-and-0786",
+                                    "title": "Fibonacci based btw 0.5 and 0.786",
+                                }
+                            ],
+                        },
+                        "filters": {
+                            "raw": "author:demo",
+                            "applied": False,
+                            "note": "Filters placeholder is accepted for forward compatibility and currently not applied upstream.",
+                        },
+                    },
+                    "meta": {"parser_version": "1.1.0"},
+                    "warnings": [],
+                },
+            }
+        }
+    },
+)
 def list_screens(
-    page: int = Query(default=1, ge=1),
-    include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page"),
-    max_pages: int | None = Query(default=None, ge=1, description="Optional cap for number of pages fetched when include_all_pages=true"),
+    page: int = Query(default=1, ge=1, examples=[1, 50]),
+    include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page", examples=[False, True]),
+    max_pages: int | None = Query(default=None, ge=1, description="Optional cap for number of pages fetched when include_all_pages=true", examples=[2, 5]),
+    filters: str | None = Query(default=None, description="Reserved placeholder for future screen filters", examples=["author:demo", "query:roce>15"]),
     proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
-        return client.list_screens(page=page, include_all_pages=include_all_pages, max_pages=max_pages, proxy_url=proxy_url)
+        return client.list_screens(page=page, include_all_pages=include_all_pages, max_pages=max_pages, proxy_url=proxy_url, filters=filters)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -229,13 +321,37 @@ def prewarm_targets(body: PrewarmRequest):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.get("/v1/screens/{screen_id}/{slug}")
+@router.get(
+    "/v1/screens/{screen_id}/{slug}",
+    openapi_extra={
+        "examples": {
+            "screenDetails": {
+                "summary": "Detailed screen page response",
+                "value": {
+                    "data": {
+                        "screen_id": 1450832,
+                        "slug": "fibonacci-based-btw-05-and-0786",
+                        "page": {
+                            "title": "Fibonacci based btw 0.5 and 0.786",
+                            "author": "Laxman",
+                            "query": "Current price > 10",
+                            "columns": ["S.No.", "Name", "CMP Rs."],
+                            "rows": [["1.", "One Point One", "46.92"]],
+                        },
+                    },
+                    "meta": {"parser_version": "1.1.0"},
+                    "warnings": [],
+                },
+            }
+        }
+    },
+)
 def get_screen_details(
     screen_id: int,
     slug: str,
-    page: int = Query(default=1, ge=1),
-    limit: int = Query(default=50, ge=1, le=50),
-    include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page"),
+    page: int = Query(default=1, ge=1, examples=[1, 2]),
+    limit: int = Query(default=50, ge=1, le=50, examples=[10, 25, 50]),
+    include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page", examples=[False, True]),
     proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
