@@ -71,6 +71,7 @@ Open:
 - `GET /ready` → readiness (checks backend wiring)
 - `GET /metrics` → basic counters
 - `GET /v1/ping` → authenticated/rate-limited ping
+- `POST /v1/prewarm` → prewarm sector/screen pages into cache
 
 ### Company data
 - `GET /v1/company/{symbol}`
@@ -177,6 +178,15 @@ curl "http://127.0.0.1:8000/v1/screens/1450832/fibonacci-based-btw-05-and-0786?p
 
 # Screen details (all pages)
 curl "http://127.0.0.1:8000/v1/screens/1450832/fibonacci-based-btw-05-and-0786?page=1&limit=50&include_all_pages=true"
+
+# Prewarm selected sectors/screens
+curl -X POST "http://127.0.0.1:8000/v1/prewarm" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sector_slugs": ["pharmaceuticals-biotechnology"],
+    "screen_refs": [{"screen_id": 1450832, "slug": "fibonacci-based-btw-05-and-0786"}],
+    "pages_per_target": 2
+  }'
 ```
 
 ---
@@ -209,6 +219,13 @@ Environment variables:
 - `RATE_LIMIT_PER_MINUTE` (default: `120`)
 - `RATE_LIMIT_BACKEND` (`memory|redis`, default: `memory`)
 - `REDIS_URL` (optional)
+- `CACHE_BACKEND` (`memory|redis`, default: `memory`)
+- `CACHE_TTL_SECONDS` (default: `300`)
+- `THROTTLE_COMPANY_INTERVAL_SECONDS` (default: `0.2`)
+- `THROTTLE_SECTOR_INTERVAL_SECONDS` (default: `0.2`)
+- `THROTTLE_SCREENS_INTERVAL_SECONDS` (default: `0.2`)
+- `UPSTREAM_MAX_RETRIES` (default: `2`)
+- `UPSTREAM_RETRY_BACKOFF_SECONDS` (default: `0.5`)
 
 ---
 

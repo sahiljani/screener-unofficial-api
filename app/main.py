@@ -4,9 +4,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api.routes import router
+from app.api import routes
+from app.core.cache import CacheStore
 from app.core.config import load_settings
 from app.core.rate_limit import allow_request
+from app.services.screener_client import ScreenerClient
 
 app = FastAPI(title="Screener Unofficial API", version="0.1.0")
 
@@ -24,6 +26,18 @@ app.state.metrics = {
     "auth_failed_total": 0,
     "rate_limited_total": 0,
 }
+
+cache_store = CacheStore(backend=settings.cache_backend, redis_client=app.state.redis_client)
+configured_client = ScreenerClient(
+    cache_ttl_seconds=settings.cache_ttl_seconds,
+    throttle_company_interval_seconds=settings.throttle_company_interval_seconds,
+    throttle_sector_interval_seconds=settings.throttle_sector_interval_seconds,
+    throttle_screens_interval_seconds=settings.throttle_screens_interval_seconds,
+    upstream_max_retries=settings.upstream_max_retries,
+    upstream_retry_backoff_seconds=settings.upstream_retry_backoff_seconds,
+    cache_store=cache_store,
+)
+routes.configure_client(configured_client)
 
 
 @app.middleware("http")
@@ -116,4 +130,4 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-app.include_router(router)
+app.include_router(routes.router)

@@ -18,11 +18,11 @@
 
 ## Phase 15 - Reliability + performance
 
-- [ ] Add optional Redis cache backend for expensive market/screens pages.
-- [ ] Add per-endpoint throttling knobs for sector/screens crawling.
-- [ ] Add background prewarm command/script for known sector/screen pages.
-- [ ] Add retry/backoff around transient upstream failures (429/5xx) with bounded attempts.
-- [ ] Add tests for retry behavior (without increasing external test flakiness).
+- [x] Add optional Redis cache backend for expensive market/screens pages.
+- [x] Add per-endpoint throttling knobs for sector/screens crawling.
+- [x] Add background prewarm command/script for known sector/screen pages.
+- [x] Add retry/backoff around transient upstream failures (429/5xx) with bounded attempts.
+- [x] Add tests for retry behavior (without increasing external test flakiness).
 
 ## Phase 16 - API UX
 

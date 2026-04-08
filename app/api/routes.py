@@ -1,9 +1,30 @@
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
 from app.services.screener_client import ScreenerClient
 
 router = APIRouter()
 client = ScreenerClient()
+
+
+def configure_client(new_client: ScreenerClient) -> None:
+    global client
+    client = new_client
+
+
+class ScreenRef(BaseModel):
+    screen_id: int
+    slug: str
+
+
+class PrewarmRequest(BaseModel):
+    sector_slugs: list[str] = Field(default_factory=list)
+    screen_refs: list[ScreenRef] = Field(default_factory=list)
+    pages_per_target: int = Field(default=1, ge=1, le=10)
+    proxy_url: str | None = None
 
 ALLOWED_TABS = {
     "analysis",
@@ -189,6 +210,21 @@ def screens_pages(
 ):
     try:
         return client.screens_pages(page=page, proxy_url=proxy_url)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.post("/v1/prewarm")
+def prewarm_targets(body: PrewarmRequest):
+    try:
+        return client.prewarm_pages(
+            sector_slugs=body.sector_slugs,
+            screen_refs=[r.model_dump() for r in body.screen_refs],
+            pages_per_target=body.pages_per_target,
+            proxy_url=body.proxy_url,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 

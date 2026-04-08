@@ -3,12 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+import hashlib
 import re
 import time
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from selectolax.parser import HTMLParser
+
+from app.core.cache import CacheStore
 
 BASE = "https://www.screener.in"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -85,11 +88,40 @@ SECTOR_ALIAS_TO_SLUG = {
 
 
 class ScreenerClient:
-    def __init__(self, cache_ttl_seconds: int = 300, min_interval_seconds: float = 0.2):
+    def __init__(
+        self,
+        cache_ttl_seconds: int = 300,
+        min_interval_seconds: float = 0.2,
+        throttle_company_interval_seconds: float | None = None,
+        throttle_sector_interval_seconds: float | None = None,
+        throttle_screens_interval_seconds: float | None = None,
+        upstream_max_retries: int = 2,
+        upstream_retry_backoff_seconds: float = 0.5,
+        cache_store: CacheStore | None = None,
+    ):
         self.cache_ttl_seconds = cache_ttl_seconds
         self.min_interval_seconds = min_interval_seconds
-        self._cache: dict[str, tuple[float, str]] = {}
-        self._last_request_at = 0.0
+        self.throttle_company_interval_seconds = (
+            min_interval_seconds if throttle_company_interval_seconds is None else max(0.0, throttle_company_interval_seconds)
+        )
+        self.throttle_sector_interval_seconds = (
+            min_interval_seconds if throttle_sector_interval_seconds is None else max(0.0, throttle_sector_interval_seconds)
+        )
+        self.throttle_screens_interval_seconds = (
+            min_interval_seconds if throttle_screens_interval_seconds is None else max(0.0, throttle_screens_interval_seconds)
+        )
+
+        self.upstream_max_retries = max(0, upstream_max_retries)
+        self.upstream_retry_backoff_seconds = max(0.0, upstream_retry_backoff_seconds)
+
+        self.cache_store = cache_store or CacheStore(backend='memory')
+
+        self._last_request_at_by_scope = {
+            'company': 0.0,
+            'sector': 0.0,
+            'screens': 0.0,
+            'default': 0.0,
+        }
 
     def _url(self, symbol: str, mode: str) -> str:
         s = symbol.strip().upper()
@@ -98,17 +130,38 @@ class ScreenerClient:
         return f"{BASE}/company/{s}/"
 
     def _cache_key(self, url: str, proxy_url: str | None = None) -> str:
-        return f"{proxy_url or 'direct'}::{url}"
+        raw = f"{proxy_url or 'direct'}::{url}"
+        digest = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+        return f"html:{digest}"
 
-    def _throttle(self) -> None:
+    def _scope_for_url(self, url: str) -> str:
+        u = url.lower()
+        if '/screens/' in u:
+            return 'screens'
+        if '/market/' in u:
+            return 'sector'
+        if '/company/' in u:
+            return 'company'
+        return 'default'
+
+    def _throttle_for_scope(self, scope: str) -> None:
+        if scope == 'company':
+            interval = self.throttle_company_interval_seconds
+        elif scope == 'sector':
+            interval = self.throttle_sector_interval_seconds
+        elif scope == 'screens':
+            interval = self.throttle_screens_interval_seconds
+        else:
+            interval = self.min_interval_seconds
+
         now = time.time()
-        wait_for = self.min_interval_seconds - (now - self._last_request_at)
+        last = self._last_request_at_by_scope.get(scope, 0.0)
+        wait_for = interval - (now - last)
         if wait_for > 0:
             time.sleep(wait_for)
-        self._last_request_at = time.time()
+        self._last_request_at_by_scope[scope] = time.time()
 
-    def _fetch_html_raw(self, url: str, proxy_url: str | None = None) -> str:
-        self._throttle()
+    def _http_get_once(self, url: str, proxy_url: str | None = None) -> str:
         with httpx.Client(
             timeout=20,
             follow_redirects=True,
@@ -119,15 +172,37 @@ class ScreenerClient:
             r.raise_for_status()
             return r.text
 
+    def _fetch_html_raw(self, url: str, proxy_url: str | None = None) -> str:
+        scope = self._scope_for_url(url)
+
+        attempt = 0
+        while True:
+            self._throttle_for_scope(scope)
+            try:
+                return self._http_get_once(url, proxy_url=proxy_url)
+            except httpx.HTTPStatusError as exc:
+                code = exc.response.status_code if exc.response is not None else None
+                retryable = code in {429, 500, 502, 503, 504}
+                if retryable and attempt < self.upstream_max_retries:
+                    attempt += 1
+                    time.sleep(self.upstream_retry_backoff_seconds * (2 ** (attempt - 1)))
+                    continue
+                raise
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.NetworkError):
+                if attempt < self.upstream_max_retries:
+                    attempt += 1
+                    time.sleep(self.upstream_retry_backoff_seconds * (2 ** (attempt - 1)))
+                    continue
+                raise
+
     def _fetch_html(self, url: str, proxy_url: str | None = None) -> str:
         key = self._cache_key(url, proxy_url)
-        now = time.time()
-        hit = self._cache.get(key)
-        if hit and hit[0] > now:
-            return hit[1]
+        hit = self.cache_store.get(key)
+        if hit is not None:
+            return hit
 
         html = self._fetch_html_raw(url, proxy_url=proxy_url)
-        self._cache[key] = (now + self.cache_ttl_seconds, html)
+        self.cache_store.set(key, html, ttl_seconds=self.cache_ttl_seconds)
         return html
 
     def _meta(self, url: str, proxy_url: str | None, parser_version: str = "0.6.0") -> dict[str, Any]:
@@ -851,6 +926,69 @@ class ScreenerClient:
                 }
             },
             "meta": self._meta(page_url, proxy_url, parser_version="0.9.0"),
+            "warnings": [],
+        }
+
+    def prewarm_pages(
+        self,
+        sector_slugs: list[str] | None = None,
+        screen_refs: list[dict[str, Any]] | None = None,
+        pages_per_target: int = 1,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        pages_per_target = max(1, int(pages_per_target))
+        sector_slugs = sector_slugs or []
+        screen_refs = screen_refs or []
+
+        attempted = 0
+        warmed = 0
+        failed = 0
+
+        # prewarm sectors
+        for slug in sector_slugs:
+            links = self._extract_sector_links(self._fetch_html(f"{BASE}/market/", proxy_url=proxy_url))
+            canonical_name = SECTOR_ALIAS_TO_SLUG.get(slug)
+            if not canonical_name:
+                continue
+            sector_url = self._resolve_sector_url(canonical_name, links)
+            if not sector_url:
+                continue
+            parsed = urlparse(sector_url)
+            base_sector_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            for p in range(1, pages_per_target + 1):
+                attempted += 1
+                try:
+                    self._fetch_html(f"{base_sector_url}?limit=50&page={p}", proxy_url=proxy_url)
+                    warmed += 1
+                except Exception:
+                    failed += 1
+
+        # prewarm screens
+        for ref in screen_refs:
+            sid = ref.get('screen_id')
+            slug = ref.get('slug')
+            if not sid or not slug:
+                continue
+            for p in range(1, pages_per_target + 1):
+                attempted += 1
+                try:
+                    self._fetch_html(f"{BASE}/screens/{sid}/{slug}/?limit=50&page={p}", proxy_url=proxy_url)
+                    warmed += 1
+                except Exception:
+                    failed += 1
+
+        return {
+            "data": {
+                "attempted_urls": attempted,
+                "warmed_urls": warmed,
+                "failed_urls": failed,
+                "pages_per_target": pages_per_target,
+            },
+            "meta": {
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "parser_version": "1.0.0",
+                "proxy_used": bool(proxy_url),
+            },
             "warnings": [],
         }
 
