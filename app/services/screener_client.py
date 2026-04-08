@@ -1001,6 +1001,29 @@ class ScreenerClient:
             "warnings": [],
         }
 
+    def _resolve_screen_slug(self, screen_id: int, proxy_url: str | None = None, max_pages: int = 10) -> str | None:
+        page = 1
+        checked = 0
+        total_pages = None
+
+        while True:
+            out = self.list_screens(page=page, include_all_pages=False, proxy_url=proxy_url)
+            page_data = out.get("data", {}).get("page", {})
+            items = page_data.get("items", [])
+            for item in items:
+                if int(item.get("screen_id", 0)) == int(screen_id):
+                    return item.get("slug")
+
+            checked += 1
+            if total_pages is None:
+                total_pages = page_data.get("pagination", {}).get("total_pages") or 1
+
+            if page >= total_pages or checked >= max_pages:
+                break
+            page += 1
+
+        return None
+
     def fetch_screen_details(
         self,
         screen_id: int,
@@ -1010,81 +1033,108 @@ class ScreenerClient:
         include_all_pages: bool = False,
         proxy_url: str | None = None,
     ) -> dict[str, Any]:
-        base_url = f"{BASE}/screens/{screen_id}/{slug}/"
+        def _is_valid_screen_page(payload: dict[str, Any]) -> bool:
+            title = (payload.get("title") or "").strip().lower()
+            if not title:
+                return False
+            if title in {"register", "login", "page not found", "not found"}:
+                return False
+            has_query = bool((payload.get("query") or "").strip())
+            has_rows = bool(payload.get("row_count", 0) > 0)
+            return has_query or has_rows
 
-        def _fetch_page(p: int) -> dict[str, Any]:
-            page_url = f"{base_url}?limit={limit}&page={p}"
-            html = self._fetch_html(page_url, proxy_url=proxy_url)
-            tree = HTMLParser(html)
+        def _run_for_slug(active_slug: str) -> tuple[str, str, dict[str, Any], list[dict[str, Any]] | None]:
+            base_url = f"{BASE}/screens/{screen_id}/{active_slug}/"
 
-            heading = tree.css_first("h1")
-            title = heading.text(separator=" ", strip=True) if heading else None
+            def _fetch_page(p: int) -> dict[str, Any]:
+                page_url = f"{base_url}?limit={limit}&page={p}"
+                html = self._fetch_html(page_url, proxy_url=proxy_url)
+                tree = HTMLParser(html)
 
-            query_node = tree.css_first("#query-builder")
-            query = query_node.text(separator="\n", strip=True) if query_node else None
+                heading = tree.css_first("h1")
+                title = heading.text(separator=" ", strip=True) if heading else None
 
-            author = None
-            owner_profile_url = None
-            for pnode in tree.css("p.sub"):
-                txt = pnode.text(separator=" ", strip=True)
-                if txt.lower().startswith("by "):
-                    author = txt[3:].strip()
-                    a = pnode.css_first("a[href]")
-                    if a:
-                        href = (a.attributes.get("href") or "").strip()
-                        if href:
-                            owner_profile_url = urljoin(BASE, href)
-                    break
+                query_node = tree.css_first("#query-builder")
+                query = query_node.text(separator="\n", strip=True) if query_node else None
 
-            export_url = None
-            export_form = tree.css_first("form[action*='/api/export/screen/']")
-            if export_form:
-                action = (export_form.attributes.get("action") or "").strip()
-                if action:
-                    export_url = urljoin(BASE, action)
+                author = None
+                owner_profile_url = None
+                for pnode in tree.css("p.sub"):
+                    txt = pnode.text(separator=" ", strip=True)
+                    if txt.lower().startswith("by "):
+                        author = txt[3:].strip()
+                        a = pnode.css_first("a[href]")
+                        if a:
+                            href = (a.attributes.get("href") or "").strip()
+                            if href:
+                                owner_profile_url = urljoin(BASE, href)
+                        break
 
-            source_id = None
-            sort = None
-            order = None
-            for inp in tree.css("input[type='hidden']"):
-                name = (inp.attributes.get("name") or "").strip()
-                value = (inp.attributes.get("value") or "").strip()
-                if name == "source_id":
-                    source_id = value or None
-                elif name == "sort":
-                    sort = value or None
-                elif name == "order":
-                    order = value or None
+                export_url = None
+                export_form = tree.css_first("form[action*='/api/export/screen/']")
+                if export_form:
+                    action = (export_form.attributes.get("action") or "").strip()
+                    if action:
+                        export_url = urljoin(BASE, action)
 
-            columns, rows = self._extract_market_rows(tree)
-            columns_meta = self._extract_columns_meta(tree)
-            current_page, total_pages = self._extract_pagination(tree)
-            total_results = self._extract_market_result_count(tree)
+                source_id = None
+                sort = None
+                order = None
+                for inp in tree.css("input[type='hidden']"):
+                    name = (inp.attributes.get("name") or "").strip()
+                    value = (inp.attributes.get("value") or "").strip()
+                    if name == "source_id":
+                        source_id = value or None
+                    elif name == "sort":
+                        sort = value or None
+                    elif name == "order":
+                        order = value or None
 
-            return {
-                "page": p,
-                "url": page_url,
-                "title": title,
-                "author": author,
-                "owner_profile_url": owner_profile_url,
-                "query": query,
-                "export_url": export_url,
-                "source_id": source_id,
-                "sort": sort,
-                "order": order,
-                "columns": columns,
-                "columns_meta": columns_meta,
-                "rows": rows,
-                "row_count": len(rows),
-                "pagination": {
-                    "current_page": current_page or p,
-                    "total_pages": total_pages,
-                    "limit": limit,
-                },
-                "total_results": total_results,
-            }
+                columns, rows = self._extract_market_rows(tree)
+                columns_meta = self._extract_columns_meta(tree)
+                current_page, total_pages = self._extract_pagination(tree)
+                total_results = self._extract_market_result_count(tree)
 
-        first = _fetch_page(page)
+                return {
+                    "page": p,
+                    "url": page_url,
+                    "title": title,
+                    "author": author,
+                    "owner_profile_url": owner_profile_url,
+                    "query": query,
+                    "export_url": export_url,
+                    "source_id": source_id,
+                    "sort": sort,
+                    "order": order,
+                    "columns": columns,
+                    "columns_meta": columns_meta,
+                    "rows": rows,
+                    "row_count": len(rows),
+                    "pagination": {
+                        "current_page": current_page or p,
+                        "total_pages": total_pages,
+                        "limit": limit,
+                    },
+                    "total_results": total_results,
+                }
+
+            first = _fetch_page(page)
+            if not include_all_pages:
+                return active_slug, base_url, first, None
+
+            total_pages = first["pagination"].get("total_pages") or 1
+            pages = [first]
+            for p in range(page + 1, total_pages + 1):
+                pages.append(_fetch_page(p))
+            return active_slug, base_url, first, pages
+
+        active_slug, base_url, first, pages = _run_for_slug(slug)
+
+        # stale slug recovery: resolve latest slug from screens list and retry once
+        if not _is_valid_screen_page(first):
+            resolved = self._resolve_screen_slug(screen_id=screen_id, proxy_url=proxy_url)
+            if resolved and resolved != active_slug:
+                active_slug, base_url, first, pages = _run_for_slug(resolved)
 
         if not first.get("title"):
             raise ValueError("Screen not found or inaccessible")
@@ -1093,23 +1143,20 @@ class ScreenerClient:
             return {
                 "data": {
                     "screen_id": screen_id,
-                    "slug": slug,
+                    "slug": active_slug,
                     "base_url": base_url,
                     "page": first,
                 },
-                "meta": self._meta(first["url"], proxy_url, parser_version="0.8.0"),
+                "meta": self._meta(first["url"], proxy_url, parser_version="1.2.0"),
                 "warnings": [],
             }
 
+        pages = pages or [first]
         total_pages = first["pagination"].get("total_pages") or 1
-        pages = [first]
-        for p in range(page + 1, total_pages + 1):
-            pages.append(_fetch_page(p))
-
         return {
             "data": {
                 "screen_id": screen_id,
-                "slug": slug,
+                "slug": active_slug,
                 "base_url": base_url,
                 "pages": pages,
                 "summary": {
@@ -1119,7 +1166,7 @@ class ScreenerClient:
                     "rows_fetched": sum(pg["row_count"] for pg in pages),
                 },
             },
-            "meta": self._meta(first["url"], proxy_url, parser_version="0.8.0"),
+            "meta": self._meta(first["url"], proxy_url, parser_version="1.2.0"),
             "warnings": [],
         }
 

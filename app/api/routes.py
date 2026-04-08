@@ -339,7 +339,7 @@ def prewarm_targets(body: PrewarmRequest):
                             "rows": [["1.", "One Point One", "46.92"]],
                         },
                     },
-                    "meta": {"parser_version": "1.1.0"},
+                    "meta": {"parser_version": "1.2.0"},
                     "warnings": [],
                 },
             }

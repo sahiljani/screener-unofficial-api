@@ -110,6 +110,8 @@ Open:
 ### Screens data
 - `GET /v1/screens/pages`
   - Lightweight page metadata endpoint (current page, total pages, count on page)
+  - Example:
+    - `GET /v1/screens/pages?page=50`
 - `GET /v1/screens`
   - Lists Screener public screens for a given page
   - Query params:
@@ -124,6 +126,9 @@ Open:
     - `data.page.items`
     - `data.summary` (for all-pages mode)
     - `data.filters`
+  - Example:
+    - `GET /v1/screens?page=1`
+    - `GET /v1/screens?page=1&include_all_pages=true&max_pages=5`
 - `GET /v1/screens/{screen_id}/{slug}`
   - Returns detailed data for one screen (query + table + pagination)
   - Includes enriched metadata when available:
@@ -136,10 +141,12 @@ Open:
     - `limit` (default: `50`, max: `50`)
     - `include_all_pages` (`true|false`, default: `false`)
       - if `true`, fetches every page from `page` to last page and returns all rows
-  - Example response highlights:
-    - `data.page.query`
-    - `data.page.columns`
-    - `data.page.rows`
+  - Slug behavior:
+    - Pass slug from `/v1/screens` response.
+    - If slug is stale, API auto-resolves latest slug by `screen_id` and retries once.
+  - Example:
+    - `GET /v1/screens/1450832/fibonacci-based-btw-05-and-0786?page=1&limit=50`
+    - `GET /v1/screens/1450832/fibonacci-based-btw-05-and-0786?page=1&limit=50&include_all_pages=true`
 
 Optional query params on company routes:
 - `mode=standalone|consolidated` (default: `consolidated`)

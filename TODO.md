@@ -33,3 +33,9 @@
   - [x] `/v1/screens/{screen_id}/{slug}`
 - [x] Add OpenAPI examples for new query parameters (`include_all_pages`, `limit`, `page`).
 - [x] Add `filters` placeholder support for future screen query customization.
+
+## Phase 17 - Screens robustness (slug recovery)
+
+- [x] Add stale-slug recovery for screen details using `screen_id` lookup from `/v1/screens`.
+- [x] Keep `screen_id` as canonical key and return resolved latest slug in response.
+- [x] Add tests for stale-slug auto-retry path.
