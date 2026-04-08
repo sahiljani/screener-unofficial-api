@@ -1,9 +1,16 @@
-from typing import Any
+from typing import Any, Union
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.models.screens import (
+    ScreenDetailAllResponse,
+    ScreenDetailResponse,
+    ScreensListAllResponse,
+    ScreensListResponse,
+    ScreensPagesResponse,
+)
 from app.services.screener_client import ScreenerClient
 
 router = APIRouter()
@@ -250,6 +257,7 @@ def get_sector_data(
 
 @router.get(
     "/v1/screens",
+    response_model=Union[ScreensListResponse, ScreensListAllResponse],
     openapi_extra={
         "examples": {
             "screensSinglePage": {
@@ -280,28 +288,36 @@ def get_sector_data(
         }
     },
 )
-def list_screens(
+async def list_screens(
     page: int = Query(default=1, ge=1, examples=[1, 50]),
     include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page", examples=[False, True]),
     max_pages: int | None = Query(default=None, ge=1, description="Optional cap for number of pages fetched when include_all_pages=true", examples=[2, 5]),
-    filters: str | None = Query(default=None, description="Reserved placeholder for future screen filters", examples=["author:demo", "query:roce>15"]),
+    q: str | None = Query(default=None, description="Search screens by title or description (client-side filter on fetched pages). For full search, combine with include_all_pages=true.", examples=["growth", "dividend"]),
+    sort: str | None = Query(default=None, description="Sort results: 'title' (alphabetical) or 'screen_id' (numeric/recency)", examples=["title", "screen_id"]),
+    order: str | None = Query(default=None, description="Sort order: 'asc' or 'desc'. Defaults to 'asc' for title, 'desc' for screen_id.", examples=["asc", "desc"]),
+    filters: str | None = Query(default=None, description="Filter screens: 'has:description', 'id_gt:N', 'id_lt:N'. Unrecognized filters are ignored.", examples=["has:description", "id_gt:100000"]),
     proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
-        return client.list_screens(page=page, include_all_pages=include_all_pages, max_pages=max_pages, proxy_url=proxy_url, filters=filters)
+        return await client.async_list_screens(page=page, include_all_pages=include_all_pages, max_pages=max_pages, proxy_url=proxy_url, filters=filters, q=q, sort=sort, order=order)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.get("/v1/screens/pages")
-def screens_pages(
+@router.get(
+    "/v1/screens/pages",
+    response_model=ScreensPagesResponse,
+    deprecated=True,
+    description="Deprecated: use GET /v1/screens instead — its pagination field returns the same info.",
+)
+async def screens_pages(
     page: int = Query(default=1, ge=1),
     proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
-        return client.screens_pages(page=page, proxy_url=proxy_url)
+        return await client.async_screens_pages(page=page, proxy_url=proxy_url)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -323,6 +339,7 @@ def prewarm_targets(body: PrewarmRequest):
 
 @router.get(
     "/v1/screens/{screen_id}/{slug}",
+    response_model=Union[ScreenDetailResponse, ScreenDetailAllResponse],
     openapi_extra={
         "examples": {
             "screenDetails": {
@@ -346,7 +363,7 @@ def prewarm_targets(body: PrewarmRequest):
         }
     },
 )
-def get_screen_details(
+async def get_screen_details(
     screen_id: int,
     slug: str,
     page: int = Query(default=1, ge=1, examples=[1, 2]),
@@ -355,7 +372,7 @@ def get_screen_details(
     proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
-        return client.fetch_screen_details(
+        return await client.async_fetch_screen_details(
             screen_id=screen_id,
             slug=slug,
             page=page,

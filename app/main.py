@@ -1,8 +1,9 @@
+import hashlib
 from collections import defaultdict, deque
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.api import routes
 from app.core.cache import CacheStore
@@ -36,6 +37,8 @@ configured_client = ScreenerClient(
     upstream_max_retries=settings.upstream_max_retries,
     upstream_retry_backoff_seconds=settings.upstream_retry_backoff_seconds,
     cache_store=cache_store,
+    screens_max_pages_default=settings.screens_max_pages_default,
+    max_crawl_seconds=settings.max_crawl_seconds,
 )
 routes.configure_client(configured_client)
 
@@ -85,6 +88,49 @@ async def auth_and_rate_limit_middleware(request: Request, call_next):
             )
 
     return await call_next(request)
+
+
+@app.middleware("http")
+async def etag_cache_middleware(request: Request, call_next):
+    """Add ETag and Cache-Control headers to API responses. Returns 304 on ETag match."""
+    response = await call_next(request)
+
+    path = request.url.path
+    # Only apply to API data endpoints (skip docs, health, metrics)
+    if not path.startswith("/v1/"):
+        return response
+
+    # Read the response body to compute ETag
+    body_chunks = []
+    async for chunk in response.body_iterator:
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        body_chunks.append(chunk)
+    body = b"".join(body_chunks)
+
+    if response.status_code == 200 and body:
+        etag = f'"{hashlib.sha256(body).hexdigest()[:16]}"'
+        if_none_match = request.headers.get("if-none-match")
+        if if_none_match and if_none_match == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers={
+                **dict(response.headers),
+                "ETag": etag,
+                "Cache-Control": f"public, max-age={settings.cache_ttl_seconds}",
+            },
+            media_type=response.media_type,
+        )
+
+    return Response(
+        content=body,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=response.media_type,
+    )
 
 
 @app.exception_handler(RequestValidationError)

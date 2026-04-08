@@ -21,6 +21,9 @@ class Settings:
     upstream_max_retries: int = 2
     upstream_retry_backoff_seconds: float = 0.5
 
+    screens_max_pages_default: int = 20
+    max_crawl_seconds: float = 60.0
+
 
 def _parse_int(value: str | None, default: int, minimum: int | None = None) -> int:
     try:
@@ -66,6 +69,9 @@ def load_settings() -> Settings:
     upstream_max_retries = _parse_int(os.getenv('UPSTREAM_MAX_RETRIES', '2'), 2, minimum=0)
     upstream_retry_backoff_seconds = _parse_float(os.getenv('UPSTREAM_RETRY_BACKOFF_SECONDS', '0.5'), 0.5, minimum=0.0)
 
+    screens_max_pages_default = _parse_int(os.getenv('SCREENS_MAX_PAGES_DEFAULT', '20'), 20, minimum=1)
+    max_crawl_seconds = _parse_float(os.getenv('MAX_CRAWL_SECONDS', '60.0'), 60.0, minimum=5.0)
+
     return Settings(
         api_key=api_key,
         rate_limit_per_minute=rate_limit_per_minute,
@@ -78,4 +84,6 @@ def load_settings() -> Settings:
         throttle_screens_interval_seconds=throttle_screens_interval_seconds,
         upstream_max_retries=upstream_max_retries,
         upstream_retry_backoff_seconds=upstream_retry_backoff_seconds,
+        screens_max_pages_default=screens_max_pages_default,
+        max_crawl_seconds=max_crawl_seconds,
     )

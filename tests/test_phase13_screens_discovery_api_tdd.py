@@ -30,10 +30,10 @@ def test_list_screens_invalid_max_pages_returns_validation_error():
 
 
 def test_list_screens_value_error_bubbles_as_bad_request(monkeypatch):
-    def boom(*args, **kwargs):
+    async def boom(*args, **kwargs):
         raise ValueError('max_pages must be >= 1')
 
-    monkeypatch.setattr(routes.client, 'list_screens', boom)
+    monkeypatch.setattr(routes.client, 'async_list_screens', boom)
     r = client.get('/v1/screens?page=1&include_all_pages=true&max_pages=1')
     assert r.status_code == 400
     body = r.json()

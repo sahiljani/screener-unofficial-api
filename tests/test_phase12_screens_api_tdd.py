@@ -32,10 +32,10 @@ def test_screen_details_endpoint_shape():
 
 
 def test_screen_details_returns_400_for_invalid(monkeypatch):
-    def boom(*args, **kwargs):
+    async def boom(*args, **kwargs):
         raise ValueError('Screen not found')
 
-    monkeypatch.setattr(routes.client, 'fetch_screen_details', boom)
+    monkeypatch.setattr(routes.client, 'async_fetch_screen_details', boom)
     r = client.get('/v1/screens/9999999/not-found')
     assert r.status_code == 400
     body = r.json()

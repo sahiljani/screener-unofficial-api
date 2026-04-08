@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -98,6 +99,8 @@ class ScreenerClient:
         upstream_max_retries: int = 2,
         upstream_retry_backoff_seconds: float = 0.5,
         cache_store: CacheStore | None = None,
+        screens_max_pages_default: int = 20,
+        max_crawl_seconds: float = 60.0,
     ):
         self.cache_ttl_seconds = cache_ttl_seconds
         self.min_interval_seconds = min_interval_seconds
@@ -113,6 +116,9 @@ class ScreenerClient:
 
         self.upstream_max_retries = max(0, upstream_max_retries)
         self.upstream_retry_backoff_seconds = max(0.0, upstream_retry_backoff_seconds)
+
+        self.screens_max_pages_default = max(1, screens_max_pages_default)
+        self.max_crawl_seconds = max(5.0, max_crawl_seconds)
 
         self.cache_store = cache_store or CacheStore(backend='memory')
 
@@ -202,6 +208,68 @@ class ScreenerClient:
             return hit
 
         html = self._fetch_html_raw(url, proxy_url=proxy_url)
+        self.cache_store.set(key, html, ttl_seconds=self.cache_ttl_seconds)
+        return html
+
+    # ── Async HTTP methods ──────────────────────────────────────────
+
+    async def _async_http_get_once(self, url: str, proxy_url: str | None = None) -> str:
+        async with httpx.AsyncClient(
+            timeout=20,
+            follow_redirects=True,
+            headers={"User-Agent": UA},
+            proxy=proxy_url if proxy_url else None,
+        ) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            return r.text
+
+    async def _async_throttle_for_scope(self, scope: str) -> None:
+        if scope == 'company':
+            interval = self.throttle_company_interval_seconds
+        elif scope == 'sector':
+            interval = self.throttle_sector_interval_seconds
+        elif scope == 'screens':
+            interval = self.throttle_screens_interval_seconds
+        else:
+            interval = self.min_interval_seconds
+
+        now = time.time()
+        last = self._last_request_at_by_scope.get(scope, 0.0)
+        wait_for = interval - (now - last)
+        if wait_for > 0:
+            await asyncio.sleep(wait_for)
+        self._last_request_at_by_scope[scope] = time.time()
+
+    async def _async_fetch_html_raw(self, url: str, proxy_url: str | None = None) -> str:
+        scope = self._scope_for_url(url)
+        attempt = 0
+        while True:
+            await self._async_throttle_for_scope(scope)
+            try:
+                return await self._async_http_get_once(url, proxy_url=proxy_url)
+            except httpx.HTTPStatusError as exc:
+                code = exc.response.status_code if exc.response is not None else None
+                retryable = code in {429, 500, 502, 503, 504}
+                if retryable and attempt < self.upstream_max_retries:
+                    attempt += 1
+                    await asyncio.sleep(self.upstream_retry_backoff_seconds * (2 ** (attempt - 1)))
+                    continue
+                raise
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.NetworkError):
+                if attempt < self.upstream_max_retries:
+                    attempt += 1
+                    await asyncio.sleep(self.upstream_retry_backoff_seconds * (2 ** (attempt - 1)))
+                    continue
+                raise
+
+    async def _async_fetch_html(self, url: str, proxy_url: str | None = None) -> str:
+        key = self._cache_key(url, proxy_url)
+        hit = self.cache_store.get(key)
+        if hit is not None:
+            return hit
+
+        html = await self._async_fetch_html_raw(url, proxy_url=proxy_url)
         self.cache_store.set(key, html, ttl_seconds=self.cache_ttl_seconds)
         return html
 
@@ -827,6 +895,58 @@ class ScreenerClient:
 
         return current_page, total_pages
 
+    @staticmethod
+    def _apply_filters(items: list[dict[str, Any]], filters: str | None) -> tuple[list[dict[str, Any]], bool]:
+        """Apply recognized filter expressions to items. Returns (filtered_items, any_applied)."""
+        if not filters:
+            return items, False
+
+        any_applied = False
+        for token in filters.split(","):
+            token = token.strip()
+            if token == "has:description":
+                items = [i for i in items if i.get("description")]
+                any_applied = True
+            elif token.startswith("id_gt:"):
+                try:
+                    threshold = int(token.split(":", 1)[1])
+                    items = [i for i in items if i.get("screen_id", 0) > threshold]
+                    any_applied = True
+                except ValueError:
+                    pass
+            elif token.startswith("id_lt:"):
+                try:
+                    threshold = int(token.split(":", 1)[1])
+                    items = [i for i in items if i.get("screen_id", 0) < threshold]
+                    any_applied = True
+                except ValueError:
+                    pass
+        return items, any_applied
+
+    @staticmethod
+    def _apply_search(items: list[dict[str, Any]], q: str | None) -> list[dict[str, Any]]:
+        """Filter items where q appears in title or description (case-insensitive)."""
+        if not q:
+            return items
+        q_lower = q.lower()
+        return [
+            i for i in items
+            if q_lower in (i.get("title") or "").lower()
+            or q_lower in (i.get("description") or "").lower()
+        ]
+
+    @staticmethod
+    def _apply_sort(items: list[dict[str, Any]], sort: str | None, order: str | None) -> list[dict[str, Any]]:
+        """Sort items by field. Default order: asc for title, desc for screen_id."""
+        if not sort or sort not in ("title", "screen_id"):
+            return items
+        default_order = "asc" if sort == "title" else "desc"
+        effective_order = order if order in ("asc", "desc") else default_order
+        reverse = effective_order == "desc"
+        if sort == "title":
+            return sorted(items, key=lambda i: (i.get("title") or "").lower(), reverse=reverse)
+        return sorted(items, key=lambda i: i.get("screen_id", 0), reverse=reverse)
+
     def list_screens(
         self,
         page: int = 1,
@@ -834,11 +954,14 @@ class ScreenerClient:
         max_pages: int | None = None,
         proxy_url: str | None = None,
         filters: str | None = None,
+        q: str | None = None,
+        sort: str | None = None,
+        order: str | None = None,
     ) -> dict[str, Any]:
         if max_pages is not None and max_pages < 1:
             raise ValueError("max_pages must be >= 1")
 
-        filters_payload = {
+        filters_payload: dict[str, Any] = {
             "raw": filters,
             "applied": False,
             "note": "Filters placeholder is accepted for forward compatibility and currently not applied upstream.",
@@ -868,8 +991,24 @@ class ScreenerClient:
 
         first = _fetch_page(page)
 
+        def _post_process_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            """Apply filters, search, and sort to a list of screen items."""
+            nonlocal filters_payload
+            filtered, any_applied = self._apply_filters(items, filters)
+            if any_applied:
+                filters_payload = {**filters_payload, "applied": True, "note": "One or more filters were applied client-side."}
+            filtered = self._apply_search(filtered, q)
+            filtered = self._apply_sort(filtered, sort, order)
+            return filtered
+
+        search_info: dict[str, Any] | None = None
+
         if not include_all_pages:
-            return {
+            first["items"] = _post_process_items(first["items"])
+            first["item_count"] = len(first["items"])
+            if q:
+                search_info = {"query": q, "matched": first["item_count"]}
+            result: dict[str, Any] = {
                 "data": {
                     "page": first,
                     "filters": filters_payload,
@@ -877,15 +1016,29 @@ class ScreenerClient:
                 "meta": self._meta(first["url"], proxy_url, parser_version="1.1.0"),
                 "warnings": [],
             }
+            if search_info:
+                result["data"]["search"] = search_info
+            return result
+
+        warnings: list[str] = []
 
         total_pages = first["pagination"].get("total_pages") or page
-        target_last_page = total_pages if max_pages is None else min(total_pages, page + max_pages - 1)
+        effective_max = max_pages if max_pages is not None else self.screens_max_pages_default
+        if max_pages is None:
+            warnings.append(f"max_pages defaulted to {self.screens_max_pages_default}; pass max_pages explicitly to override")
+        target_last_page = min(total_pages, page + effective_max - 1)
 
         pages = [first]
         seen_screen_ids = {item["screen_id"] for item in first["items"]}
         duplicates_skipped = 0
+        crawl_start = time.monotonic()
+        timed_out = False
 
         for p in range(page + 1, target_last_page + 1):
+            if time.monotonic() - crawl_start > self.max_crawl_seconds:
+                warnings.append(f"Crawl stopped after {len(pages)} pages due to {self.max_crawl_seconds}s timeout")
+                timed_out = True
+                break
             pg = _fetch_page(p)
             deduped_items = []
             for item in pg["items"]:
@@ -899,22 +1052,34 @@ class ScreenerClient:
             pg["item_count"] = len(deduped_items)
             pages.append(pg)
 
-        return {
+        # Apply search/sort/filters across all pages
+        for pg in pages:
+            pg["items"] = _post_process_items(pg["items"])
+            pg["item_count"] = len(pg["items"])
+
+        total_matched = sum(pg["item_count"] for pg in pages)
+        if q:
+            search_info = {"query": q, "matched": total_matched}
+
+        result = {
             "data": {
                 "pages": pages,
                 "summary": {
                     "from_page": page,
-                    "to_page": target_last_page,
+                    "to_page": pages[-1]["page"],
                     "pages_fetched": len(pages),
-                    "screens_fetched": sum(pg["item_count"] for pg in pages),
+                    "screens_fetched": total_matched,
                     "duplicates_skipped": duplicates_skipped,
-                    "max_pages_applied": max_pages is not None,
+                    "max_pages_applied": max_pages is not None or timed_out,
                 },
                 "filters": filters_payload,
             },
             "meta": self._meta(first["url"], proxy_url, parser_version="1.1.0"),
-            "warnings": [],
+            "warnings": warnings,
         }
+        if search_info:
+            result["data"]["search"] = search_info
+        return result
 
     def screens_pages(self, page: int = 1, proxy_url: str | None = None) -> dict[str, Any]:
         page_url = f"{BASE}/screens/?page={page}"
@@ -936,6 +1101,336 @@ class ScreenerClient:
             },
             "meta": self._meta(page_url, proxy_url, parser_version="0.9.0"),
             "warnings": [],
+        }
+
+    # ── Async screens methods ─────────────────────────────────────
+
+    async def async_screens_pages(self, page: int = 1, proxy_url: str | None = None) -> dict[str, Any]:
+        page_url = f"{BASE}/screens/?page={page}"
+        html = await self._async_fetch_html(page_url, proxy_url=proxy_url)
+        tree = HTMLParser(html)
+
+        current_page, total_pages = self._extract_screens_pagination(tree)
+        items = self._extract_screens_from_page(tree)
+
+        return {
+            "data": {
+                "page": {
+                    "page": page,
+                    "url": page_url,
+                    "current_page": current_page,
+                    "total_pages": total_pages,
+                    "screens_on_page": len(items),
+                }
+            },
+            "meta": self._meta(page_url, proxy_url, parser_version="0.9.0"),
+            "warnings": [],
+        }
+
+    async def async_list_screens(
+        self,
+        page: int = 1,
+        include_all_pages: bool = False,
+        max_pages: int | None = None,
+        proxy_url: str | None = None,
+        filters: str | None = None,
+        q: str | None = None,
+        sort: str | None = None,
+        order: str | None = None,
+    ) -> dict[str, Any]:
+        if max_pages is not None and max_pages < 1:
+            raise ValueError("max_pages must be >= 1")
+
+        filters_payload: dict[str, Any] = {
+            "raw": filters,
+            "applied": False,
+            "note": "Filters placeholder is accepted for forward compatibility and currently not applied upstream.",
+        }
+
+        async def _fetch_page(p: int) -> dict[str, Any]:
+            page_url = f"{BASE}/screens/?page={p}"
+            html = await self._async_fetch_html(page_url, proxy_url=proxy_url)
+            tree = HTMLParser(html)
+
+            title = tree.css_first("h1")
+            heading = title.text(separator=" ", strip=True) if title else "Popular Stock Screens"
+            items = self._extract_screens_from_page(tree)
+            current_page, total_pages = self._extract_screens_pagination(tree)
+
+            return {
+                "page": p,
+                "url": page_url,
+                "heading": heading,
+                "items": items,
+                "item_count": len(items),
+                "pagination": {
+                    "current_page": current_page or p,
+                    "total_pages": total_pages,
+                },
+            }
+
+        first = await _fetch_page(page)
+
+        def _post_process_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            nonlocal filters_payload
+            filtered, any_applied = self._apply_filters(items, filters)
+            if any_applied:
+                filters_payload = {**filters_payload, "applied": True, "note": "One or more filters were applied client-side."}
+            filtered = self._apply_search(filtered, q)
+            filtered = self._apply_sort(filtered, sort, order)
+            return filtered
+
+        search_info: dict[str, Any] | None = None
+
+        if not include_all_pages:
+            first["items"] = _post_process_items(first["items"])
+            first["item_count"] = len(first["items"])
+            if q:
+                search_info = {"query": q, "matched": first["item_count"]}
+            result: dict[str, Any] = {
+                "data": {
+                    "page": first,
+                    "filters": filters_payload,
+                },
+                "meta": self._meta(first["url"], proxy_url, parser_version="1.1.0"),
+                "warnings": [],
+            }
+            if search_info:
+                result["data"]["search"] = search_info
+            return result
+
+        warnings: list[str] = []
+
+        total_pages = first["pagination"].get("total_pages") or page
+        effective_max = max_pages if max_pages is not None else self.screens_max_pages_default
+        if max_pages is None:
+            warnings.append(f"max_pages defaulted to {self.screens_max_pages_default}; pass max_pages explicitly to override")
+        target_last_page = min(total_pages, page + effective_max - 1)
+
+        # Fetch remaining pages concurrently with semaphore
+        sem = asyncio.Semaphore(3)
+        crawl_start = time.monotonic()
+
+        async def _guarded_fetch(p: int) -> dict[str, Any] | None:
+            if time.monotonic() - crawl_start > self.max_crawl_seconds:
+                return None
+            async with sem:
+                return await _fetch_page(p)
+
+        tasks = [_guarded_fetch(p) for p in range(page + 1, target_last_page + 1)]
+        fetched = await asyncio.gather(*tasks)
+
+        pages = [first]
+        seen_screen_ids = {item["screen_id"] for item in first["items"]}
+        duplicates_skipped = 0
+        timed_out = False
+
+        for pg in fetched:
+            if pg is None:
+                timed_out = True
+                warnings.append(f"Crawl stopped after {len(pages)} pages due to {self.max_crawl_seconds}s timeout")
+                break
+            deduped_items = []
+            for item in pg["items"]:
+                sid = item.get("screen_id")
+                if sid in seen_screen_ids:
+                    duplicates_skipped += 1
+                    continue
+                seen_screen_ids.add(sid)
+                deduped_items.append(item)
+            pg["items"] = deduped_items
+            pg["item_count"] = len(deduped_items)
+            pages.append(pg)
+
+        for pg in pages:
+            pg["items"] = _post_process_items(pg["items"])
+            pg["item_count"] = len(pg["items"])
+
+        total_matched = sum(pg["item_count"] for pg in pages)
+        if q:
+            search_info = {"query": q, "matched": total_matched}
+
+        result = {
+            "data": {
+                "pages": pages,
+                "summary": {
+                    "from_page": page,
+                    "to_page": pages[-1]["page"],
+                    "pages_fetched": len(pages),
+                    "screens_fetched": total_matched,
+                    "duplicates_skipped": duplicates_skipped,
+                    "max_pages_applied": max_pages is not None or timed_out,
+                },
+                "filters": filters_payload,
+            },
+            "meta": self._meta(first["url"], proxy_url, parser_version="1.1.0"),
+            "warnings": warnings,
+        }
+        if search_info:
+            result["data"]["search"] = search_info
+        return result
+
+    async def async_fetch_screen_details(
+        self,
+        screen_id: int,
+        slug: str,
+        page: int = 1,
+        limit: int = 50,
+        include_all_pages: bool = False,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        def _is_valid_screen_page(payload: dict[str, Any]) -> bool:
+            title = (payload.get("title") or "").strip().lower()
+            if not title:
+                return False
+            if title in {"register", "login", "page not found", "not found"}:
+                return False
+            has_query = bool((payload.get("query") or "").strip())
+            has_rows = bool(payload.get("row_count", 0) > 0)
+            return has_query or has_rows
+
+        async def _run_for_slug(active_slug: str) -> tuple[str, str, dict[str, Any], list[dict[str, Any]] | None, list[str]]:
+            base_url = f"{BASE}/screens/{screen_id}/{active_slug}/"
+
+            async def _fetch_page(p: int) -> dict[str, Any]:
+                page_url = f"{base_url}?limit={limit}&page={p}"
+                html = await self._async_fetch_html(page_url, proxy_url=proxy_url)
+                tree = HTMLParser(html)
+
+                heading = tree.css_first("h1")
+                title = heading.text(separator=" ", strip=True) if heading else None
+
+                query_node = tree.css_first("#query-builder")
+                query = query_node.text(separator="\n", strip=True) if query_node else None
+
+                author = None
+                owner_profile_url = None
+                for pnode in tree.css("p.sub"):
+                    txt = pnode.text(separator=" ", strip=True)
+                    if txt.lower().startswith("by "):
+                        author = txt[3:].strip()
+                        a = pnode.css_first("a[href]")
+                        if a:
+                            href = (a.attributes.get("href") or "").strip()
+                            if href:
+                                owner_profile_url = urljoin(BASE, href)
+                        break
+
+                export_url = None
+                export_form = tree.css_first("form[action*='/api/export/screen/']")
+                if export_form:
+                    action = (export_form.attributes.get("action") or "").strip()
+                    if action:
+                        export_url = urljoin(BASE, action)
+
+                source_id = None
+                sort_val = None
+                order_val = None
+                for inp in tree.css("input[type='hidden']"):
+                    name = (inp.attributes.get("name") or "").strip()
+                    value = (inp.attributes.get("value") or "").strip()
+                    if name == "source_id":
+                        source_id = value or None
+                    elif name == "sort":
+                        sort_val = value or None
+                    elif name == "order":
+                        order_val = value or None
+
+                columns, rows = self._extract_market_rows(tree)
+                columns_meta = self._extract_columns_meta(tree)
+                current_page, total_pages = self._extract_pagination(tree)
+                total_results = self._extract_market_result_count(tree)
+
+                return {
+                    "page": p,
+                    "url": page_url,
+                    "title": title,
+                    "author": author,
+                    "owner_profile_url": owner_profile_url,
+                    "query": query,
+                    "export_url": export_url,
+                    "source_id": source_id,
+                    "sort": sort_val,
+                    "order": order_val,
+                    "columns": columns,
+                    "columns_meta": columns_meta,
+                    "rows": rows,
+                    "row_count": len(rows),
+                    "pagination": {
+                        "current_page": current_page or p,
+                        "total_pages": total_pages,
+                        "limit": limit,
+                    },
+                    "total_results": total_results,
+                }
+
+            first = await _fetch_page(page)
+            if not include_all_pages:
+                return active_slug, base_url, first, None, []
+
+            total_pages = first["pagination"].get("total_pages") or 1
+            effective_max = min(total_pages, page + self.screens_max_pages_default - 1)
+
+            sem = asyncio.Semaphore(3)
+            crawl_start = time.monotonic()
+            detail_warnings: list[str] = []
+
+            async def _guarded_fetch(p: int) -> dict[str, Any] | None:
+                if time.monotonic() - crawl_start > self.max_crawl_seconds:
+                    return None
+                async with sem:
+                    return await _fetch_page(p)
+
+            tasks = [_guarded_fetch(p) for p in range(page + 1, effective_max + 1)]
+            fetched = await asyncio.gather(*tasks)
+
+            all_pages = [first]
+            for pg in fetched:
+                if pg is None:
+                    detail_warnings.append(f"Crawl stopped after {len(all_pages)} pages due to {self.max_crawl_seconds}s timeout")
+                    break
+                all_pages.append(pg)
+
+            return active_slug, base_url, first, all_pages, detail_warnings
+
+        active_slug, base_url, first, pages, crawl_warnings = await _run_for_slug(slug)
+
+        if not _is_valid_screen_page(first):
+            resolved = self._resolve_screen_slug(screen_id=screen_id, proxy_url=proxy_url)
+            if resolved and resolved != active_slug:
+                active_slug, base_url, first, pages, crawl_warnings = await _run_for_slug(resolved)
+
+        if not first.get("title"):
+            raise ValueError("Screen not found or inaccessible")
+
+        if not include_all_pages:
+            return {
+                "data": {
+                    "screen_id": screen_id,
+                    "slug": active_slug,
+                    "base_url": base_url,
+                    "page": first,
+                },
+                "meta": self._meta(first["url"], proxy_url, parser_version="1.2.0"),
+                "warnings": crawl_warnings,
+            }
+
+        pages = pages or [first]
+        return {
+            "data": {
+                "screen_id": screen_id,
+                "slug": active_slug,
+                "base_url": base_url,
+                "pages": pages,
+                "summary": {
+                    "from_page": page,
+                    "to_page": pages[-1]["page"],
+                    "pages_fetched": len(pages),
+                    "rows_fetched": sum(pg["row_count"] for pg in pages),
+                },
+            },
+            "meta": self._meta(first["url"], proxy_url, parser_version="1.2.0"),
+            "warnings": crawl_warnings,
         }
 
     def prewarm_pages(
@@ -1120,21 +1615,27 @@ class ScreenerClient:
 
             first = _fetch_page(page)
             if not include_all_pages:
-                return active_slug, base_url, first, None
+                return active_slug, base_url, first, None, []
 
             total_pages = first["pagination"].get("total_pages") or 1
+            effective_max = min(total_pages, page + self.screens_max_pages_default - 1)
             pages = [first]
-            for p in range(page + 1, total_pages + 1):
+            crawl_start = time.monotonic()
+            detail_warnings: list[str] = []
+            for p in range(page + 1, effective_max + 1):
+                if time.monotonic() - crawl_start > self.max_crawl_seconds:
+                    detail_warnings.append(f"Crawl stopped after {len(pages)} pages due to {self.max_crawl_seconds}s timeout")
+                    break
                 pages.append(_fetch_page(p))
-            return active_slug, base_url, first, pages
+            return active_slug, base_url, first, pages, detail_warnings
 
-        active_slug, base_url, first, pages = _run_for_slug(slug)
+        active_slug, base_url, first, pages, crawl_warnings = _run_for_slug(slug)
 
         # stale slug recovery: resolve latest slug from screens list and retry once
         if not _is_valid_screen_page(first):
             resolved = self._resolve_screen_slug(screen_id=screen_id, proxy_url=proxy_url)
             if resolved and resolved != active_slug:
-                active_slug, base_url, first, pages = _run_for_slug(resolved)
+                active_slug, base_url, first, pages, crawl_warnings = _run_for_slug(resolved)
 
         if not first.get("title"):
             raise ValueError("Screen not found or inaccessible")
@@ -1148,11 +1649,10 @@ class ScreenerClient:
                     "page": first,
                 },
                 "meta": self._meta(first["url"], proxy_url, parser_version="1.2.0"),
-                "warnings": [],
+                "warnings": crawl_warnings,
             }
 
         pages = pages or [first]
-        total_pages = first["pagination"].get("total_pages") or 1
         return {
             "data": {
                 "screen_id": screen_id,
@@ -1161,13 +1661,13 @@ class ScreenerClient:
                 "pages": pages,
                 "summary": {
                     "from_page": page,
-                    "to_page": total_pages,
+                    "to_page": pages[-1]["page"],
                     "pages_fetched": len(pages),
                     "rows_fetched": sum(pg["row_count"] for pg in pages),
                 },
             },
             "meta": self._meta(first["url"], proxy_url, parser_version="1.2.0"),
-            "warnings": [],
+            "warnings": crawl_warnings,
         }
 
     def _extract_locs(self, xml: str) -> list[str]:
