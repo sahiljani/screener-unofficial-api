@@ -3,6 +3,7 @@ from collections import defaultdict, deque
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from app.api import routes
@@ -12,6 +13,14 @@ from app.core.rate_limit import allow_request
 from app.services.screener_client import ScreenerClient
 
 app = FastAPI(title="Screener Unofficial API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 settings = load_settings()
 
