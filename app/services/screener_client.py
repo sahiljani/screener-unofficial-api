@@ -687,7 +687,7 @@ class ScreenerClient:
 
         return items
 
-    def _extract_screens_pagination(self, tree: HTMLParser) -> tuple[int, int | None]:
+    def _extract_screens_pagination(self, tree: HTMLParser) -> tuple[int, int]:
         current_page = 1
         total_pages: int | None = None
 
@@ -708,9 +708,26 @@ class ScreenerClient:
                 except ValueError:
                     continue
 
+        # Sparse / edge pagination fallback:
+        # if we cannot infer total_pages from links, assume current page is the last known page.
+        if total_pages is None:
+            total_pages = current_page
+
+        # If current page is marked active (#) and exceeds link max (e.g. page=50), prefer current page.
+        total_pages = max(total_pages, current_page)
+
         return current_page, total_pages
 
-    def list_screens(self, page: int = 1, include_all_pages: bool = False, proxy_url: str | None = None) -> dict[str, Any]:
+    def list_screens(
+        self,
+        page: int = 1,
+        include_all_pages: bool = False,
+        max_pages: int | None = None,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        if max_pages is not None and max_pages < 1:
+            raise ValueError("max_pages must be >= 1")
+
         def _fetch_page(p: int) -> dict[str, Any]:
             page_url = f"{BASE}/screens/?page={p}"
             html = self._fetch_html(page_url, proxy_url=proxy_url)
@@ -740,26 +757,66 @@ class ScreenerClient:
                 "data": {
                     "page": first,
                 },
-                "meta": self._meta(first["url"], proxy_url, parser_version="0.8.0"),
+                "meta": self._meta(first["url"], proxy_url, parser_version="0.9.0"),
                 "warnings": [],
             }
 
         total_pages = first["pagination"].get("total_pages") or page
+        target_last_page = total_pages if max_pages is None else min(total_pages, page + max_pages - 1)
+
         pages = [first]
-        for p in range(page + 1, total_pages + 1):
-            pages.append(_fetch_page(p))
+        seen_screen_ids = {item["screen_id"] for item in first["items"]}
+        duplicates_skipped = 0
+
+        for p in range(page + 1, target_last_page + 1):
+            pg = _fetch_page(p)
+            deduped_items = []
+            for item in pg["items"]:
+                sid = item.get("screen_id")
+                if sid in seen_screen_ids:
+                    duplicates_skipped += 1
+                    continue
+                seen_screen_ids.add(sid)
+                deduped_items.append(item)
+            pg["items"] = deduped_items
+            pg["item_count"] = len(deduped_items)
+            pages.append(pg)
 
         return {
             "data": {
                 "pages": pages,
                 "summary": {
                     "from_page": page,
-                    "to_page": total_pages,
+                    "to_page": target_last_page,
                     "pages_fetched": len(pages),
                     "screens_fetched": sum(pg["item_count"] for pg in pages),
+                    "duplicates_skipped": duplicates_skipped,
+                    "max_pages_applied": max_pages is not None,
                 },
             },
-            "meta": self._meta(first["url"], proxy_url, parser_version="0.8.0"),
+            "meta": self._meta(first["url"], proxy_url, parser_version="0.9.0"),
+            "warnings": [],
+        }
+
+    def screens_pages(self, page: int = 1, proxy_url: str | None = None) -> dict[str, Any]:
+        page_url = f"{BASE}/screens/?page={page}"
+        html = self._fetch_html(page_url, proxy_url=proxy_url)
+        tree = HTMLParser(html)
+
+        current_page, total_pages = self._extract_screens_pagination(tree)
+        items = self._extract_screens_from_page(tree)
+
+        return {
+            "data": {
+                "page": {
+                    "page": page,
+                    "url": page_url,
+                    "current_page": current_page,
+                    "total_pages": total_pages,
+                    "screens_on_page": len(items),
+                }
+            },
+            "meta": self._meta(page_url, proxy_url, parser_version="0.9.0"),
             "warnings": [],
         }
 

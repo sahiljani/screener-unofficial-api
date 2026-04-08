@@ -171,10 +171,24 @@ def get_sector_data(
 def list_screens(
     page: int = Query(default=1, ge=1),
     include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page"),
+    max_pages: int | None = Query(default=None, ge=1, description="Optional cap for number of pages fetched when include_all_pages=true"),
     proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
-        return client.list_screens(page=page, include_all_pages=include_all_pages, proxy_url=proxy_url)
+        return client.list_screens(page=page, include_all_pages=include_all_pages, max_pages=max_pages, proxy_url=proxy_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/v1/screens/pages")
+def screens_pages(
+    page: int = Query(default=1, ge=1),
+    proxy_url: str | None = PROXY_URL_QUERY,
+):
+    try:
+        return client.screens_pages(page=page, proxy_url=proxy_url)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 

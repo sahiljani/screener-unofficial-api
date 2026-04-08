@@ -100,12 +100,17 @@ Open:
       - if `true`, fetches every page from `page` to last page and returns all rows
 
 ### Screens data
+- `GET /v1/screens/pages`
+  - Lightweight page metadata endpoint (current page, total pages, count on page)
 - `GET /v1/screens`
   - Lists Screener public screens for a given page
   - Query params:
     - `page` (default: `1`)
     - `include_all_pages` (`true|false`, default: `false`)
       - if `true`, fetches every page from `page` to last page and returns all screens
+    - `max_pages` (optional, >= `1`)
+      - cap total fetched pages when `include_all_pages=true`
+  - Includes cross-page de-duplication by `screen_id`.
 - `GET /v1/screens/{screen_id}/{slug}`
   - Returns detailed data for one screen (query + table + pagination)
   - Query params:
@@ -150,11 +155,17 @@ curl "http://127.0.0.1:8000/v1/sectors/pharmaceuticals-biotechnology?limit=50&pa
 # Sector page data (all pages)
 curl "http://127.0.0.1:8000/v1/sectors/pharmaceuticals-biotechnology?limit=50&page=1&include_all_pages=true"
 
+# Screens pages metadata
+curl "http://127.0.0.1:8000/v1/screens/pages?page=50"
+
 # Screens list (single page)
 curl "http://127.0.0.1:8000/v1/screens?page=50"
 
 # Screens list (all pages from page 1)
 curl "http://127.0.0.1:8000/v1/screens?page=1&include_all_pages=true"
+
+# Screens list (all pages with cap)
+curl "http://127.0.0.1:8000/v1/screens?page=1&include_all_pages=true&max_pages=5"
 
 # Screen details (single page)
 curl "http://127.0.0.1:8000/v1/screens/1450832/fibonacci-based-btw-05-and-0786?page=1&limit=50"

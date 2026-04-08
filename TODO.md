@@ -2,10 +2,10 @@
 
 ## Phase 13 - Screens discovery hardening
 
-- [ ] Add `/v1/screens/pages` endpoint to quickly return total pages + counts without fetching every item page.
-- [ ] Add dedupe guard when aggregating screens across many pages (by `screen_id`).
-- [ ] Add optional `max_pages` query param for `/v1/screens?include_all_pages=true` to cap long crawls.
-- [ ] Add tests covering page 50+ and edge pagination states (missing Next, sparse page links).
+- [x] Add `/v1/screens/pages` endpoint to quickly return total pages + counts without fetching every item page.
+- [x] Add dedupe guard when aggregating screens across many pages (by `screen_id`).
+- [x] Add optional `max_pages` query param for `/v1/screens?include_all_pages=true` to cap long crawls.
+- [x] Add tests covering page 50+ and edge pagination states (missing Next, sparse page links).
 
 ## Phase 14 - Screen detail enrichment
 
