@@ -381,8 +381,11 @@ class ScreenerClient:
         value = re.sub(r"-+", "-", value).strip("-")
         return value
 
+    def _market_table_node(self, tree: HTMLParser):
+        return tree.css_first("[data-page-results] table") or tree.css_first("table.data-table")
+
     def _extract_market_rows(self, tree: HTMLParser) -> tuple[list[str], list[list[str]]]:
-        table = tree.css_first("[data-page-results] table") or tree.css_first("table.data-table")
+        table = self._market_table_node(tree)
         if not table:
             return [], []
 
@@ -398,6 +401,37 @@ class ScreenerClient:
                 data_rows.append(row)
 
         return columns, data_rows
+
+    def _extract_columns_meta(self, tree: HTMLParser) -> list[dict[str, str | None]]:
+        table = self._market_table_node(tree)
+        if not table:
+            return []
+
+        header_row = table.css_first("tr")
+        if not header_row:
+            return []
+
+        meta: list[dict[str, str | None]] = []
+        for idx, cell in enumerate(header_row.css("th,td")):
+            label = cell.text(separator=" ", strip=True)
+            tooltip = (cell.attributes.get("data-tooltip") or "").strip() or None
+            title = (cell.attributes.get("title") or "").strip() or None
+            unit = None
+            unit_node = cell.css_first("span")
+            if unit_node:
+                unit = unit_node.text(separator=" ", strip=True) or None
+
+            meta.append(
+                {
+                    "index": idx,
+                    "name": label,
+                    "tooltip": tooltip,
+                    "title": title,
+                    "unit": unit,
+                }
+            )
+
+        return meta
 
     def _extract_pagination(self, tree: HTMLParser) -> tuple[int | None, int | None]:
         current_page: int | None = None
@@ -843,13 +877,40 @@ class ScreenerClient:
             query = query_node.text(separator="\n", strip=True) if query_node else None
 
             author = None
+            owner_profile_url = None
             for pnode in tree.css("p.sub"):
                 txt = pnode.text(separator=" ", strip=True)
                 if txt.lower().startswith("by "):
                     author = txt[3:].strip()
+                    a = pnode.css_first("a[href]")
+                    if a:
+                        href = (a.attributes.get("href") or "").strip()
+                        if href:
+                            owner_profile_url = urljoin(BASE, href)
                     break
 
+            export_url = None
+            export_form = tree.css_first("form[action*='/api/export/screen/']")
+            if export_form:
+                action = (export_form.attributes.get("action") or "").strip()
+                if action:
+                    export_url = urljoin(BASE, action)
+
+            source_id = None
+            sort = None
+            order = None
+            for inp in tree.css("input[type='hidden']"):
+                name = (inp.attributes.get("name") or "").strip()
+                value = (inp.attributes.get("value") or "").strip()
+                if name == "source_id":
+                    source_id = value or None
+                elif name == "sort":
+                    sort = value or None
+                elif name == "order":
+                    order = value or None
+
             columns, rows = self._extract_market_rows(tree)
+            columns_meta = self._extract_columns_meta(tree)
             current_page, total_pages = self._extract_pagination(tree)
             total_results = self._extract_market_result_count(tree)
 
@@ -858,8 +919,14 @@ class ScreenerClient:
                 "url": page_url,
                 "title": title,
                 "author": author,
+                "owner_profile_url": owner_profile_url,
                 "query": query,
+                "export_url": export_url,
+                "source_id": source_id,
+                "sort": sort,
+                "order": order,
                 "columns": columns,
+                "columns_meta": columns_meta,
                 "rows": rows,
                 "row_count": len(rows),
                 "pagination": {

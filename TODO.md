@@ -9,12 +9,12 @@
 
 ## Phase 14 - Screen detail enrichment
 
-- [ ] Parse and return extra metadata from screen detail page:
-  - [ ] created_by / owner profile link
-  - [ ] export endpoint URL (if present)
-  - [ ] source_id + sort/order hidden form fields
-- [ ] Add `columns_meta` where available (tooltips/unit hints from table headers).
-- [ ] Add tests for enriched metadata extraction.
+- [x] Parse and return extra metadata from screen detail page:
+  - [x] created_by / owner profile link
+  - [x] export endpoint URL (if present)
+  - [x] source_id + sort/order hidden form fields
+- [x] Add `columns_meta` where available (tooltips/unit hints from table headers).
+- [x] Add tests for enriched metadata extraction.
 
 ## Phase 15 - Reliability + performance
 

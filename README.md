@@ -113,6 +113,11 @@ Open:
   - Includes cross-page de-duplication by `screen_id`.
 - `GET /v1/screens/{screen_id}/{slug}`
   - Returns detailed data for one screen (query + table + pagination)
+  - Includes enriched metadata when available:
+    - `owner_profile_url`
+    - `export_url`
+    - `source_id`, `sort`, `order`
+    - `columns_meta` (header tooltip/unit hints)
   - Query params:
     - `page` (default: `1`)
     - `limit` (default: `50`, max: `50`)
