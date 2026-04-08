@@ -15,8 +15,22 @@ ALLOWED_TABS = {
     "ratios",
     "shareholding",
     "documents",
-    "insights",
 }
+
+PROXY_URL_QUERY = Query(
+    default=None,
+    description=(
+        "Optional proxy URL for outbound requests. "
+        "Format: scheme://[username:password@]host:port "
+        "(e.g. http://user:pass@127.0.0.1:8080 or socks5://127.0.0.1:9050)."
+    ),
+    pattern=r"^(https?|socks5h?|socks4a?)://.+",
+    examples=[
+        "http://username:password@host:port",
+        "https://username:password@host:port",
+        "socks5://username:password@host:port",
+    ],
+)
 
 @router.get("/health")
 def health():
@@ -58,7 +72,7 @@ def ping():
 def get_company(
     symbol: str,
     mode: str = Query(default="consolidated", pattern="^(standalone|consolidated)$"),
-    proxy_url: str | None = None,
+    proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
         return client.fetch_company(symbol=symbol, mode=mode, proxy_url=proxy_url)
@@ -69,7 +83,7 @@ def get_company(
 def get_company_raw(
     symbol: str,
     mode: str = Query(default="consolidated", pattern="^(standalone|consolidated)$"),
-    proxy_url: str | None = None,
+    proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
         return client.fetch_company_raw(symbol=symbol, mode=mode, proxy_url=proxy_url)
@@ -82,7 +96,7 @@ def get_company_tab(
     symbol: str,
     tab: str,
     mode: str = Query(default="consolidated", pattern="^(standalone|consolidated)$"),
-    proxy_url: str | None = None,
+    proxy_url: str | None = PROXY_URL_QUERY,
 ):
     if tab not in ALLOWED_TABS:
         raise HTTPException(status_code=400, detail=f"Unsupported tab '{tab}'. Allowed: {sorted(ALLOWED_TABS)}")
@@ -97,7 +111,7 @@ def get_company_tab(
 def compare_companies(
     symbols: str = Query(..., description="Comma-separated symbols, e.g. TCS,INFY"),
     mode: str = Query(default="consolidated", pattern="^(standalone|consolidated)$"),
-    proxy_url: str | None = None,
+    proxy_url: str | None = PROXY_URL_QUERY,
 ):
     try:
         symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
@@ -117,6 +131,38 @@ def search_companies(
 ):
     try:
         return client.search_companies(query=q, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/v1/sectors")
+def list_sectors(
+    proxy_url: str | None = PROXY_URL_QUERY,
+):
+    try:
+        return client.list_sectors(proxy_url=proxy_url)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/v1/sectors/{sector}")
+def get_sector_data(
+    sector: str,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=50, ge=1, le=50),
+    include_all_pages: bool = Query(default=False, description="When true, fetches all remaining pages from the starting page"),
+    proxy_url: str | None = PROXY_URL_QUERY,
+):
+    try:
+        return client.fetch_sector_data(
+            sector=sector,
+            page=page,
+            limit=limit,
+            include_all_pages=include_all_pages,
+            proxy_url=proxy_url,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 

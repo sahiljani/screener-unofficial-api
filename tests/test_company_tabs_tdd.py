@@ -66,23 +66,39 @@ def test_documents_tab_returns_links_shape():
     assert isinstance(body['data']['result']['links'], list)
 
 
-def test_insights_tab_returns_items_shape():
-    r = client.get('/v1/company/TCS/insights')
+def test_analysis_tab_returns_structured_shape():
+    r = client.get('/v1/company/TCS/analysis')
     assert r.status_code == 200
     body = r.json()
-    assert body['data']['tab'] == 'insights'
-    assert 'items' in body['data']['result']
-    assert isinstance(body['data']['result']['items'], list)
+    assert body['data']['tab'] == 'analysis'
+    assert 'pros' in body['data']['result']
+    assert 'cons' in body['data']['result']
+    assert 'notes' in body['data']['result']
+    assert isinstance(body['data']['result']['pros'], list)
+    assert isinstance(body['data']['result']['cons'], list)
 
 
-def test_company_aggregate_contains_phase2_tabs():
+def test_peers_tab_returns_structured_shape():
+    r = client.get('/v1/company/TCS/peers')
+    assert r.status_code == 200
+    body = r.json()
+    assert body['data']['tab'] == 'peers'
+    assert 'columns' in body['data']['result']
+    assert 'rows' in body['data']['result']
+    assert isinstance(body['data']['result']['columns'], list)
+    assert isinstance(body['data']['result']['rows'], list)
+
+
+def test_company_aggregate_contains_major_sections_without_insights():
     r = client.get('/v1/company/TCS')
     assert r.status_code == 200
     data = r.json()['data']
+    assert 'analysis' in data
+    assert 'peers' in data
     assert 'profit_loss' in data
     assert 'balance_sheet' in data
     assert 'cash_flow' in data
     assert 'ratios' in data
     assert 'shareholding' in data
     assert 'documents' in data
-    assert 'insights' in data
+    assert 'insights' not in data

@@ -17,7 +17,6 @@ MINIMAL_HTML = """
     <section id='ratios'><table><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table></section>
     <section id='shareholding'><table><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table></section>
     <section id='documents'><a href='https://example.com/a.pdf'>Doc</a></section>
-    <section id='insights'><p>Insight 1</p></section>
   </body>
 </html>
 """
@@ -30,6 +29,16 @@ class StubClient(ScreenerClient):
 
     def _fetch_html_raw(self, url: str, proxy_url: str | None = None) -> str:
         self.calls += 1
+        if '/api/company/' in url and '/peers/' in url:
+            return """
+            <div class='responsive-holder'>
+              <table>
+                <tr><th>S.No.</th><th>Name</th><th>CMP Rs.</th></tr>
+                <tr><td>1</td><td>TCS</td><td>100</td></tr>
+                <tr><td>2</td><td>INFY</td><td>200</td></tr>
+              </table>
+            </div>
+            """
         return MINIMAL_HTML
 
 

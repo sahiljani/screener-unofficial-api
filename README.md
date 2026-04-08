@@ -85,13 +85,29 @@ Open:
   - `ratios`
   - `shareholding`
   - `documents`
-  - `insights`
 - `GET /v1/compare?symbols=TCS,INFY`
 - `GET /v1/search/companies?q=tata&limit=10`
 
+### Sectors / Market data
+- `GET /v1/sectors`
+  - Lists supported top-level sectors (slug + Screener market URL when available)
+- `GET /v1/sectors/{sector}`
+  - Returns paginated table data for a sector market page
+  - Query params:
+    - `page` (default: `1`)
+    - `limit` (default: `50`, max: `50`)
+    - `include_all_pages` (`true|false`, default: `false`)
+      - if `true`, fetches every page from `page` to last page and returns all rows
+
 Optional query params on company routes:
 - `mode=standalone|consolidated` (default: `consolidated`)
-- `proxy_url=<scheme://user:pass@host:port>`
+- `proxy_url` (string | null)
+  - Format: `<scheme>://[username:password@]host:port`
+  - Allowed schemes: `http`, `https`, `socks4`, `socks4a`, `socks5`, `socks5h`
+  - Examples:
+    - `proxy_url=http://username:password@host:port`
+    - `proxy_url=https://username:password@host:port`
+    - `proxy_url=socks5://username:password@host:port`
 
 ---
 
@@ -109,6 +125,15 @@ curl "http://127.0.0.1:8000/v1/compare?symbols=TCS,INFY"
 
 # Search companies
 curl "http://127.0.0.1:8000/v1/search/companies?q=tata&limit=5"
+
+# List sectors
+curl "http://127.0.0.1:8000/v1/sectors"
+
+# Sector page data (single page)
+curl "http://127.0.0.1:8000/v1/sectors/pharmaceuticals-biotechnology?limit=50&page=1"
+
+# Sector page data (all pages)
+curl "http://127.0.0.1:8000/v1/sectors/pharmaceuticals-biotechnology?limit=50&page=1&include_all_pages=true"
 ```
 
 ---
