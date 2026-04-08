@@ -4,3 +4,4 @@ httpx[socks]==0.28.1
 selectolax==0.3.26
 pydantic==2.11.7
 python-dotenv==1.0.1
+mcp[cli]>=1.0.0

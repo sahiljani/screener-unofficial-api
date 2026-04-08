@@ -3,7 +3,7 @@ services:
     build: .
     container_name: screener-unofficial-api
     ports:
-      - "8000:8000"
+      - "8098:8098"
     environment:
       API_KEY: ${API_KEY:-}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}

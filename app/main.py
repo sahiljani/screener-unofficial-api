@@ -56,6 +56,10 @@ routes.configure_client(configured_client)
 async def auth_and_rate_limit_middleware(request: Request, call_next):
     path = request.url.path
 
+    # Skip all middleware for MCP transport (streaming responses break BaseHTTPMiddleware)
+    if path.startswith("/mcp"):
+        return await call_next(request)
+
     metrics = getattr(request.app.state, "metrics", None)
     if metrics is None:
         metrics = {"requests_total": 0, "auth_failed_total": 0, "rate_limited_total": 0}
@@ -63,7 +67,7 @@ async def auth_and_rate_limit_middleware(request: Request, call_next):
     metrics["requests_total"] = int(metrics.get("requests_total", 0)) + 1
 
     # Keep docs/openapi/health cheap and accessible
-    public_prefixes = ("/docs", "/openapi.json", "/redoc", "/health", "/ready", "/metrics")
+    public_prefixes = ("/docs", "/openapi.json", "/redoc", "/health", "/ready", "/metrics", "/mcp")
     is_public = path.startswith(public_prefixes)
 
     if not is_public:
@@ -102,9 +106,14 @@ async def auth_and_rate_limit_middleware(request: Request, call_next):
 @app.middleware("http")
 async def etag_cache_middleware(request: Request, call_next):
     """Add ETag and Cache-Control headers to API responses. Returns 304 on ETag match."""
+    path = request.url.path
+
+    # Skip for MCP transport (streaming responses break BaseHTTPMiddleware)
+    if path.startswith("/mcp"):
+        return await call_next(request)
+
     response = await call_next(request)
 
-    path = request.url.path
     # Only apply to API data endpoints (skip docs, health, metrics)
     if not path.startswith("/v1/"):
         return response
@@ -186,3 +195,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(routes.router)
+
+# ── Mount MCP SSE server at /mcp ──────────────────────────────────
+try:
+    from screener_mcp.server import mcp as mcp_server
+    app.mount("/mcp", mcp_server.sse_app())
+except ImportError:
+    pass
